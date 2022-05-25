@@ -575,6 +575,12 @@ static void ShowConsoleTitle(void)
 	return;
 }
 
+static inline int64_t GetTimeStamp() {
+    struct timeval tv;
+    gettimeofday(&tv,NULL);
+    return tv.tv_sec*(int64_t)1000000+tv.tv_usec;
+}
+
 static UINT8 PlayFile(void)
 {
 	const GeneralOptions& genOpts = mediaInfo._genOpts;
@@ -599,16 +605,22 @@ static UINT8 PlayFile(void)
 	manualRenderLoop = (retVal != AERR_OK);
 	controlVal = 0;
 	mediaInfo._playState &= ~(PLAYSTATE_END | PLAYSTATE_FIN);
-	noDispTime = 0;
 	needRefresh = true;
+	UINT32 oldDataPos = 0;
+	int64_t usDelta = 0;
+	int64_t usAtLastUpdate = GetTimeStamp();
+	UINT32 lastDataPos = oldDataPos;
 	while(! (mediaInfo._playState & PLAYSTATE_END))
 	{
-		if (! (mediaInfo._playState & PLAYSTATE_PAUSE) && noDispTime <= 0)
-			needRefresh = true;	// always update when playing
+		lastDataPos = myPlayer.GetCurPos(PLAYPOS_FILEOFS);
+		//if (! (mediaInfo._playState & PLAYSTATE_PAUSE))
+			//needRefresh = true;	// always update when playing
+
 		if (needRefresh)
 		{
 			const char* pState;
-			
+			usAtLastUpdate = GetTimeStamp();
+
 			if (mediaInfo._playState & PLAYSTATE_PAUSE)
 				pState = "Paused ";
 			else if (myPlayer.GetState() & PLAYSTATE_END)
@@ -617,15 +629,18 @@ static UINT8 PlayFile(void)
 				pState = "Fading ";
 			else
 				pState = "Playing";
-			
+
 			UINT32 dataLen = mediaInfo._fileEndPos - mediaInfo._fileStartPos;
-			UINT32 dataPos = myPlayer.GetCurPos(PLAYPOS_FILEOFS);
+			UINT32 dataPos = lastDataPos;
 			dataPos = (dataPos >= mediaInfo._fileStartPos) ? (dataPos - mediaInfo._fileStartPos) : 0x00;
-			
+
 			if (vgmPcmStrms == NULL || vgmPcmStrms->empty())
 			{
-				printf("%s%6.2f%%  %s / %s seconds  \r", pState,
+				printf("%s%6.2f%% @ %08X (%7.1fHz/%7.2fms)  %s / %s seconds  \r", pState,
 					100.0 * dataPos / dataLen,
+					lastDataPos,
+					1000000.0 / usDelta,
+					usDelta / 1000.0,
 					GetTimeStr(myPlayer.GetCurTime(0), timeDispMode).c_str(),
 					GetTimeStr(myPlayer.GetTotalTime(0), timeDispMode).c_str());
 			}
@@ -637,8 +652,11 @@ static UINT8 PlayFile(void)
 					pbMode += 'R';	// reverse playback
 				if (strmDev->pbMode & 0x80)
 					pbMode += 'L';	// looping
-				printf("%s%6.2f%%  %s / %s seconds", pState,
+				printf("%s%5.1f%% @ %08X (%7.1fHz/%7.2fms)  %s / %s seconds", pState,
 					100.0 * dataPos / dataLen,
+					lastDataPos,
+					1000000.0 / usDelta,
+					usDelta / 1000.0,
 					GetTimeStr(myPlayer.GetCurTime(0), timeDispMode).c_str(),
 					GetTimeStr(myPlayer.GetTotalTime(0), timeDispMode).c_str());
 				if (genOpts.showStrmCmds == 0x01)
@@ -653,7 +671,6 @@ static UINT8 PlayFile(void)
 			}
 			fflush(stdout);
 			needRefresh = false;
-			noDispTime = 0;
 		}
 		
 		if (manualRenderLoop && ! (mediaInfo._playState & PLAYSTATE_PAUSE))
@@ -663,21 +680,19 @@ static UINT8 PlayFile(void)
 				AudioDrv_WriteData(adOut.data, wrtBytes, &audioBuf[0]);
 			else if (adLog.data != NULL)
 				AudioDrv_WriteData(adLog.data, wrtBytes, &audioBuf[0]);
-			if (noDispTime > 0)
-			{
-				noDispTime -= 200;
-				if (noDispTime <= 0)
-					needRefresh = true;
+			if (lastDataPos != oldDataPos) {
+				oldDataPos = lastDataPos;
+				needRefresh = true;
+				usDelta = GetTimeStamp() - usAtLastUpdate;
 			}
 		}
 		else
 		{
-			Sleep(50);
-			if (noDispTime > 0)
-			{
-				noDispTime -= 50;
-				if (noDispTime <= 0)
-					needRefresh = true;
+			usleep(20);
+			if (lastDataPos != oldDataPos) {
+				oldDataPos = lastDataPos;
+				usDelta = GetTimeStamp() - usAtLastUpdate;
+				needRefresh = true;
 			}
 		}
 		
